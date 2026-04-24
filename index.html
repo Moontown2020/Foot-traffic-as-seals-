@@ -4,62 +4,74 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Melbourne Seal Map</title>
-    <!-- Using a slightly older, super-stable version of the map engine -->
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
     <style>
-        /* This section ensures the map actually has a height on your screen */
-        html, body { height: 100%; margin: 0; padding: 0; background-color: #1a1a1a; }
+        /* Ensures the map takes up the WHOLE screen */
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; height: 100%; }
         
-        .ui-panel {
-            position: absolute; top: 15px; left: 15px; 
-            background: white; padding: 15px; border-radius: 10px;
-            z-index: 10; box-shadow: 0 4px 15px rgba(0,0,0,0.5);
-            max-width: 240px; font-family: sans-serif;
+        /* UI Styling */
+        .overlay {
+            position: absolute; top: 10px; left: 10px; 
+            background: white; padding: 15px; border-radius: 8px;
+            z-index: 100; font-family: sans-serif; box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+            max-width: 250px;
         }
-        #status { color: #005bb7; font-weight: bold; font-size: 14px; margin-top: 5px; }
-        .hint { font-size: 11px; color: #777; margin-top: 10px; line-height: 1.3; }
+        #log { font-size: 11px; color: #666; margin-top: 10px; border-top: 1px solid #eee; padding-top: 5px; }
+        .seal-legend { font-size: 20px; vertical-align: middle; }
     </style>
 </head>
 <body>
 
-<div class="ui-panel">
-    <h2 style="margin:0; font-size: 18px;">Melbourne Seals 🦭</h2>
-    <div id="status">Waking up sensors...</div>
-    <div class="hint">
-        <b>Controls:</b><br>
-        • Right-click + drag to tilt 3D<br>
-        • Click a seal for street info
-    </div>
+<div class="overlay">
+    <h2 style="margin:0; color: #005bb7;">Melbourne Seals 🦭</h2>
+    <p style="font-size: 12px; margin: 5px 0;">Live traffic as seals. Bigger seals = more people.</p>
+    <div id="status" style="font-weight: bold; color: orange;">Initializing...</div>
+    <div id="log">Status Log: Ready</div>
 </div>
 
 <div id="map"></div>
 
 <script>
-    const statusText = document.getElementById('status');
+    const status = document.getElementById('status');
+    const logDiv = document.getElementById('log');
 
-    // Initialize Map with a very reliable style
+    function log(msg) {
+        console.log(msg);
+        logDiv.innerHTML = msg;
+    }
+
+    // 1. Setup the Map with a reliable Raster Tile background (Failsafe)
     const map = new maplibre-gl.Map({
         container: 'map',
-        // This style is very stable and doesn't require a credit card or key
-        style: 'https://tiles.openfreemap.org/styles/liberty', 
+        style: {
+            "version": 8,
+            "sources": {
+                "osm": {
+                    "type": "raster",
+                    "tiles": ["https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"],
+                    "tileSize": 256,
+                    "attribution": "&copy; OpenStreetMap contributors &copy; CARTO"
+                }
+            },
+            "layers": [{
+                "id": "osm",
+                "type": "raster",
+                "source": "osm"
+            }]
+        },
         center: [144.9631, -37.8136],
         zoom: 14,
-        pitch: 45,
-        antialias: true
-    });
-
-    // Error catching for the map tiles
-    map.on('error', () => {
-        statusText.innerText = "Connection Error. Try refreshing.";
-        statusText.style.color = "red";
+        pitch: 45
     });
 
     map.on('load', () => {
-        statusText.innerText = "Map Ready. Finding Seals...";
-        
-        // Build the Seal Icon
+        log("Map background loaded. Fetching seals...");
+        status.innerText = "Loading Melbourne Data...";
+        status.style.color = "blue";
+
+        // Create the Seal Image
         const canvas = document.createElement('canvas');
         canvas.width = 64; canvas.height = 64;
         const ctx = canvas.getContext('2d');
@@ -67,30 +79,20 @@
         ctx.fillText('🦭', 32, 50);
         map.addImage('seal-img', ctx.getImageData(0, 0, 64, 64));
 
-        // Add 3D Buildings
-        map.addLayer({
-            'id': '3d-buildings',
-            'source': 'openmaptiles',
-            'source-layer': 'building',
-            'type': 'fill-extrusion',
-            'paint': {
-                'fill-extrusion-color': '#aaa',
-                'fill-extrusion-height': ['get', 'render_height'],
-                'fill-extrusion-opacity': 0.4
-            }
-        });
-
-        loadMelbourneData();
+        loadData();
     });
 
-    async function loadMelbourneData() {
+    async function loadData() {
         const URL_COUNTS = 'https://data.melbourne.vic.gov.au/api/explore/v2.1/catalog/datasets/pedestrian-counting-system-past-hour-counts-per-minute/records?limit=100';
         const URL_SENSORS = 'https://data.melbourne.vic.gov.au/api/explore/v2.1/catalog/datasets/pedestrian-counting-system-sensor-locations/records?limit=100';
 
         try {
+            log("Contacting Melbourne API...");
             const [res1, res2] = await Promise.all([fetch(URL_COUNTS), fetch(URL_SENSORS)]);
             const counts = await res1.json();
             const sensors = await res2.json();
+
+            log(`Data received. Processing ${counts.results.length} records.`);
 
             const features = counts.results.map(record => {
                 const loc = sensors.results.find(s => s.location_id === record.location_id);
@@ -103,7 +105,7 @@
                     'properties': {
                         'name': loc.sensor_description,
                         'pop': val,
-                        'size': Math.max(0.6, Math.min(val / 12, 4)) 
+                        'size': Math.max(0.5, Math.min(val / 10, 4)) 
                     }
                 };
             }).filter(f => f !== null);
@@ -119,30 +121,36 @@
                     'layout': {
                         'icon-image': 'seal-img',
                         'icon-size': ['get', 'size'],
-                        'icon-allow-overlap': true,
-                        'icon-pitch-alignment': 'viewport'
+                        'icon-allow-overlap': true
                     }
                 });
             }
-            statusText.innerText = `Live: ${features.length} Seals found!`;
-            statusText.style.color = "green";
+
+            status.innerText = "Live: Seals Active 🦭";
+            status.style.color = "green";
+            log("Complete! Click a seal to see traffic.");
         } catch (e) {
-            statusText.innerText = "Melbourne API is busy. Retrying...";
-            setTimeout(loadMelbourneData, 5000);
+            log("API Error. Retrying in 5s...");
+            setTimeout(loadData, 5000);
         }
     }
 
-    // Interaction
+    // Interactive Popups
     map.on('click', 'seal-layer', (e) => {
         const p = e.features[0].properties;
         new maplibre-gl.Popup()
             .setLngLat(e.lngLat)
-            .setHTML(`<b>${p.name}</b><br>${p.pop} people per min`)
+            .setHTML(`<strong>${p.name}</strong><br>${p.pop} people right now`)
             .addTo(map);
     });
 
-    // Refresh every 60 seconds
-    setInterval(loadMelbourneData, 60000);
+    // Hover effect
+    map.on('mouseenter', 'seal-layer', () => map.getCanvas().style.cursor = 'pointer');
+    map.on('mouseleave', 'seal-layer', () => map.getCanvas().style.cursor = '');
+
+    // Refresh data every 60 seconds
+    setInterval(loadData, 60000);
 </script>
+
 </body>
 </html>
