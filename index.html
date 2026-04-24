@@ -7,49 +7,63 @@
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
     <style>
-        body { margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
-        #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #1a1a1a; }
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; background: #222; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; }
         .ui-panel {
             position: absolute; top: 20px; left: 20px; 
-            background: rgba(255, 255, 255, 0.9);
+            background: rgba(255, 255, 255, 0.95);
             padding: 20px; border-radius: 12px; z-index: 10;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-            max-width: 260px; pointer-events: none;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            max-width: 260px; pointer-events: auto;
         }
         h1 { margin: 0 0 10px; font-size: 18px; color: #005bb7; }
-        .legend { font-size: 13px; color: #333; line-height: 1.4; }
-        #status { color: #2563eb; font-weight: bold; margin-top: 10px; font-size: 12px; }
+        #status { color: #d9534f; font-weight: bold; margin-top: 10px; font-size: 13px; }
     </style>
 </head>
 <body>
 <div class="ui-panel">
     <h1>Melbourne Seal Flow 🦭</h1>
-    <div class="legend">
-        Live pedestrian flow in the CBD.<br><br>
-        <b>How to navigate:</b><br>
-        • Right-click + drag to rotate 3D<br>
-        • Scroll to zoom<br>
-        • Click a seal for data
-    </div>
-    <div id="status">Connecting to Melbourne sensors...</div>
+    <div id="status">Step 1: Initializing Map...</div>
+    <p style="font-size: 12px; color: #666;">If screen stays dark, please wait 10 seconds for the Melbourne API to wake up.</p>
 </div>
 <div id="map"></div>
+
 <script>
+    const status = document.getElementById('status');
+
+    // Initialize Map
     const map = new maplibre-gl.Map({
         container: 'map',
-        style: 'https://tiles.openfreemap.org/styles/bright',
+        style: 'https://tiles.openfreemap.org/styles/liberty', 
         center: [144.9631, -37.8136],
         zoom: 15,
-        pitch: 55,
-        bearing: -15
+        pitch: 50
     });
-    const DATA_URL = 'https://data.melbourne.vic.gov.au/api/explore/v2.1/catalog/datasets/pedestrian-counting-system-past-hour-counts-per-minute/records?limit=100';
-    const SENSOR_URL = 'https://data.melbourne.vic.gov.au/api/explore/v2.1/catalog/datasets/pedestrian-counting-system-sensor-locations/records?limit=100';
+
+    map.on('load', () => {
+        status.innerText = "Step 2: Map Ready. Fetching Melbourne Data...";
+        status.style.color = "#f0ad4e";
+
+        // Create Seal Icon
+        const canvas = document.createElement('canvas');
+        canvas.width = 128; canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+        ctx.font = '100px serif'; ctx.textAlign = 'center';
+        ctx.fillText('🦭', 64, 100);
+        map.addImage('seal-img', ctx.getImageData(0, 0, 128, 128));
+
+        updateMapData();
+    });
+
     async function updateMapData() {
+        const DATA_URL = 'https://data.melbourne.vic.gov.au/api/explore/v2.1/catalog/datasets/pedestrian-counting-system-past-hour-counts-per-minute/records?limit=100';
+        const SENSOR_URL = 'https://data.melbourne.vic.gov.au/api/explore/v2.1/catalog/datasets/pedestrian-counting-system-sensor-locations/records?limit=100';
+
         try {
             const [dataRes, sensorRes] = await Promise.all([fetch(DATA_URL), fetch(SENSOR_URL)]);
             const data = await dataRes.json();
             const sensors = await sensorRes.json();
+
             const features = data.results.map(record => {
                 const sensor = sensors.results.find(s => s.location_id === record.location_id);
                 if (!sensor) return null;
@@ -57,62 +71,29 @@
                 return {
                     'type': 'Feature',
                     'geometry': { 'type': 'Point', 'coordinates': [sensor.longitude, sensor.latitude] },
-                    'properties': {
-                        'count': count,
-                        'name': sensor.sensor_description,
-                        'size': Math.max(0.5, Math.min(count / 15, 5))
-                    }
+                    'properties': { 'count': count, 'name': sensor.sensor_description, 'size': Math.max(0.6, Math.min(count / 15, 5)) }
                 };
             }).filter(f => f !== null);
-            const geojson = { 'type': 'FeatureCollection', 'features': features };
+
             if (map.getSource('seals')) {
-                map.getSource('seals').setData(geojson);
+                map.getSource('seals').setData({ 'type': 'FeatureCollection', 'features': features });
             } else {
-                map.addSource('seals', { 'type': 'geojson', 'data': geojson });
+                map.addSource('seals', { 'type': 'geojson', 'data': { 'type': 'FeatureCollection', 'features': features } });
                 map.addLayer({
-                    'id': 'seal-layer',
-                    'type': 'symbol',
-                    'source': 'seals',
-                    'layout': {
-                        'icon-image': 'seal-img',
-                        'icon-size': ['get', 'size'],
-                        'icon-allow-overlap': true,
-                        'icon-pitch-alignment': 'viewport'
-                    }
+                    'id': 'seal-layer', 'type': 'symbol', 'source': 'seals',
+                    'layout': { 'icon-image': 'seal-img', 'icon-size': ['get', 'size'], 'icon-allow-overlap': true }
                 });
             }
-            document.getElementById('status').innerText = "Live: Updated at " + new Date().toLocaleTimeString();
+            status.innerText = "Step 3: Seals Live! (Updates every min)";
+            status.style.color = "#5cb85c";
         } catch (e) {
-            document.getElementById('status').innerText = "Error loading live data.";
+            status.innerText = "Error: Could not reach Melbourne API.";
+            console.error(e);
         }
     }
-    map.on('load', () => {
-        map.addLayer({
-            'id': '3d-buildings',
-            'source': 'openmaptiles',
-            'source-layer': 'building',
-            'type': 'fill-extrusion',
-            'paint': {
-                'fill-extrusion-color': '#ccc',
-                'fill-extrusion-height': ['get', 'render_height'],
-                'fill-extrusion-opacity': 0.4
-            }
-        });
-        const canvas = document.createElement('canvas');
-        canvas.width = 128; canvas.height = 128;
-        const ctx = canvas.getContext('2d');
-        ctx.font = '100px serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('🦭', 64, 100);
-        map.addImage('seal-img', ctx.getImageData(0, 0, 128, 128));
-        updateMapData();
-        setInterval(updateMapData, 60000);
-    });
-    map.on('click', 'seal-layer', (e) => {
-        const p = e.features[0].properties;
-        new maplibre-gl.Popup().setLngLat(e.lngLat)
-            .setHTML(`<b>${p.name}</b><br>Pedestrians: ${p.count}`).addTo(map);
-    });
+
+    // Refresh every minute
+    setInterval(updateMapData, 60000);
 </script>
 </body>
 </html>
